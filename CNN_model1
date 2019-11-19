@@ -1,0 +1,41 @@
+rm(list=ls())
+library("e1071")
+library("caret")
+library("aod")
+setwd("~/Rworkspace")
+ds <- read.csv(file = "0135.HK.csv",stringsAsFactors = F)
+ds_30 <- mat.or.vec(3001,31)
+y <- mat.or.vec(1,3000)
+
+for (day in c(1:3001)) {
+  day2 = day + 30;
+  ds_30[day,] <- ds$Close[c(day:day2)]
+}
+
+for (day in c(1:3000)){
+  if (ds_30[day+1,31]>ds_30[day,31]){
+    y[day]<-1
+  }else{
+    y[day]<-0
+  }
+}
+x<-mat.or.vec(3001,30)
+
+for(j in c(1:30)){
+   x[,j]<-(ds_30[,j+1]-ds_30[,j])/ds_30[,j]
+}
+x<-x[1:3000,]
+x=data.frame(x,y=as.factor(y))
+svm_model_after_tune <- svm(y ~., data=x[1:2000,], kernel='radial', cost=2,gamma=10, scale=FALSE)
+summary(svm_model_after_tune)
+pred <- predict(svm_model_after_tune,x[1:2000,])
+system.time(predict(svm_model_after_tune,x[1:2000,]))
+confusionMatrix(y[1:2000], pred)
+#test
+Tpred <- predict(svm_model_after_tune,x[2001:2500,])
+
+confusionMatrix(y[2001:2500], Tpred)
+#validate
+Vpred <- predict(svm_model_after_tune,x[2501:3000,])
+
+confusionMatrix(y[2501:3000], Vpred)
