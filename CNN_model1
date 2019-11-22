@@ -1,41 +1,155 @@
-rm(list=ls())
-library("e1071")
-library("caret")
-library("aod")
-setwd("~/Rworkspace")
-ds <- read.csv(file = "0135.HK.csv",stringsAsFactors = F)
-ds_30 <- mat.or.vec(3001,31)
-y <- mat.or.vec(1,3000)
+import os
+import tensorflow as tf
+import numpy as np
+import pandas as pd
+import pysentiment as ps
 
-for (day in c(1:3001)) {
-  day2 = day + 30;
-  ds_30[day,] <- ds$Close[c(day:day2)]
-}
+def load_data_from_csv(file):
+    indexStock=[]    
+    stock = pd.read_csv(file)
+    for i in range(3001):
+      temp=stock['Rate'].values[i:i+30]
+      if temp is not None:
+          indexStock.append(temp)
+    return indexStock
 
-for (day in c(1:3000)){
-  if (ds_30[day+1,31]>ds_30[day,31]){
-    y[day]<-1
-  }else{
-    y[day]<-0
-  }
-}
-x<-mat.or.vec(3001,30)
 
-for(j in c(1:30)){
-   x[,j]<-(ds_30[,j+1]-ds_30[,j])/ds_30[,j]
-}
-x<-x[1:3000,]
-x=data.frame(x,y=as.factor(y))
-svm_model_after_tune <- svm(y ~., data=x[1:2000,], kernel='radial', cost=2,gamma=10, scale=FALSE)
-summary(svm_model_after_tune)
-pred <- predict(svm_model_after_tune,x[1:2000,])
-system.time(predict(svm_model_after_tune,x[1:2000,]))
-confusionMatrix(y[1:2000], pred)
-#test
-Tpred <- predict(svm_model_after_tune,x[2001:2500,])
+def load_test_from_csv(file,n):
+    indexStock=[]    
+    stock = pd.read_csv(file)
+    for i in range(501):
+      temp=stock['Rate'].values[n+i:n+i+30]
+      if temp is not None:
+          indexStock.append(temp)
+    return indexStock
 
-confusionMatrix(y[2001:2500], Tpred)
-#validate
-Vpred <- predict(svm_model_after_tune,x[2501:3000,])
 
-confusionMatrix(y[2501:3000], Vpred)
+#randomly shuffle images    
+def shuffle_in_unison(a, b):
+    assert len(a) == len(b)
+    shuffled_a = np.empty(a.shape, dtype=a.dtype)
+    shuffled_b = np.empty(b.shape, dtype=b.dtype)
+    permutation = np.random.permutation(len(a))
+    for old_index, new_index in enumerate(permutation):
+        shuffled_a[new_index] = a[old_index]
+        shuffled_b[new_index] = b[old_index]
+    return shuffled_a, shuffled_b
+
+
+def create_label_list(stockList):
+    label = []
+    for i in range(len(stockList)-1):
+        temp2=stockList[i+1]
+        if type(temp2[29]) is str():
+            print("no")
+        if temp2[29]>0:
+            label.append([1,0])
+        else:
+            label.append([0,1])
+    return label
+
+#define result    
+def weight_variable(shape,n):
+  initial = tf.truncated_normal(shape, stddev=0.1)
+  return tf.Variable(initial,name=n)
+
+def bias_variable(shape,n):
+  initial = tf.constant(0.1, shape=shape)
+  return tf.Variable(initial,name=n)
+    
+def conv2d(x, W):
+  return tf.nn.conv2d(x, W, strides=[1, 1, 1, 1], padding='SAME')
+
+def max_pool_2x2(x):
+  return tf.nn.max_pool(x, ksize=[1, 2, 2, 1],
+                        strides=[1, 2, 2, 1], padding='SAME')
+   
+  
+def main():
+    tf.reset_default_graph()
+    indexStock=load_data_from_csv('C:/Users/Dan Wenxuan/Documents/Rworkspace/0135.HK.csv')
+    StockLabels=create_label_list(indexStock)
+    indexStock=indexStock[0:len(indexStock)-1]
+    
+    TindexStock=load_test_from_csv('C:/Users/Dan Wenxuan/Documents/Rworkspace/0135.HK.csv',3000)
+    TStockLabels=create_label_list(TindexStock)
+    TindexStock=TindexStock[0:len(TindexStock)-1]
+        
+    VindexStock=load_test_from_csv('C:/Users/Dan Wenxuan/Documents/Rworkspace/0135.HK.csv',3500)
+    VStockLabels=create_label_list(VindexStock)
+    VindexStock=VindexStock[0:len(VindexStock)-1]
+    
+    print(len(indexStock))
+    print(len(StockLabels))
+    print(len(TindexStock))
+    print(len(TStockLabels))
+
+    indexStock=np.asarray(indexStock)
+    StockLabels=np.asarray(StockLabels)
+    [indexStock,StockLabels]=shuffle_in_unison(indexStock,StockLabels) 
+
+    TindexStock=np.asarray(TindexStock)   
+    TStockLabels=np.asarray(TStockLabels)
+    [TindexStock,TStockLabels]=shuffle_in_unison(TindexStock,TStockLabels) 
+    
+    VindexStock=np.asarray(VindexStock)   
+    VStockLabels=np.asarray(VStockLabels)
+    [VindexStock,VStockLabels]=shuffle_in_unison(VindexStock,VStockLabels) 
+
+    print(TindexStock.size)
+    print(indexStock.size)
+    print(VindexStock.size)    
+    x = tf.placeholder(tf.float32, shape=[None, 30],name='x')
+    y_ = tf.placeholder(tf.float32, shape=[None, 2],name='y')
+   
+
+    W_conv1 = weight_variable([1, 5, 1, 32],'W_conv1')
+    b_conv1 = bias_variable([32],'b_conv1')
+    
+    x_image=tf.reshape(x, [-1, 1, 5, 1])
+    h_conv1 = tf.nn.relu(conv2d(x_image, W_conv1) + b_conv1)
+
+    W_conv2 = weight_variable([1, 30, 32, 64],'W_conv2')
+    b_conv2 = bias_variable([64],'b_conv2')
+    h_conv2 = tf.nn.relu(conv2d(h_conv1, W_conv2) + b_conv2)
+    
+    
+    W_fc1 = weight_variable([30 * 1 * 64, 1024],'W_fc1')
+    b_fc1 = bias_variable([1024],'b_fc1') 
+
+    h_pool2_flat = tf.reshape(h_conv2, [-1, 30*1*64])
+    h_fc1 = tf.nn.relu(tf.matmul(h_pool2_flat, W_fc1) + b_fc1)
+    
+    keep_prob = tf.placeholder(tf.float32)
+    h_fc1_drop = tf.nn.dropout(h_fc1, keep_prob)
+    
+    W_fc2 = weight_variable([1024, 2],'W_fc2')
+    b_fc2 = bias_variable([2],'b_fc2')
+
+    y_conv = tf.matmul(h_fc1_drop, W_fc2) + b_fc2
+
+    cross_entropy = tf.reduce_mean(
+        tf.nn.softmax_cross_entropy_with_logits(labels=y_, logits=y_conv))
+    train_step = tf.train.AdamOptimizer(1e-3).minimize(cross_entropy)
+    correct_prediction = tf.equal(tf.argmax(y_conv, 1), tf.argmax(y_, 1))
+    accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+    saver = tf.train.Saver()
+
+    confusion = tf.confusion_matrix(labels= tf.argmax(y_, axis = 1), predictions=tf.argmax(y_conv, axis = 1))
+    with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+
+        for i in range(100):
+            train_accuracy = accuracy.eval(feed_dict={x:indexStock, y_: StockLabels,  keep_prob: 1.0})
+            print('step %d, training accuracy %g' % (i, train_accuracy))
+            test_accuracy = accuracy.eval(feed_dict={x:TindexStock, y_: TStockLabels, keep_prob: 1.0})
+            print('step %d, testing accuracy %g' % (i, test_accuracy))
+            val_accuracy = accuracy.eval(feed_dict={x:VindexStock, y_: VStockLabels,  keep_prob: 1.0})
+            print('step %d, validating accuracy %g' % (i, val_accuracy))
+            train_step.run(feed_dict={x:indexStock, y_: StockLabels, keep_prob: 0.5})
+            
+        print('training accuracy %g' % accuracy.eval(feed_dict={x: indexStock, y_: StockLabels, keep_prob: 1.0}))
+        print(confusion.eval(feed_dict={x:indexStock, y_: StockLabels,  keep_prob: 1.0}))
+        save_path = saver.save(sess, "C:/Users/Dan Wenxuan/Desktop/fyp data/checkpoint/0823lots/fypmodel.ckpt")
+        print("Model saved in file: %s" % save_path)
+if __name__ == "__main__": main()
