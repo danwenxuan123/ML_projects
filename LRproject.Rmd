@@ -1,0 +1,489 @@
+---
+title: "LRproject"
+author: "Wenxuan Dan"
+date: "2019/11/24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r loadlib, echo=T, results='hide', message=F, warning=F}
+setwd('C:/Users/danwe/Course_material/Linear Regression/LR project/')
+library(tidyverse)
+library(ggplot2)
+library(modelr)
+library(splines)
+library(gridExtra)
+library(grid)
+library(png)
+library(GGally)
+library(leaps) 
+library(bestglm)
+library(car)
+library(psycho)
+library(glmnet)
+library(L1pack)
+library(corrplot)
+theme_set(theme_light())
+tdata<-read_csv("countries.csv")%>%
+  drop_na()
+
+drawgrid<-function(plotdf,x1,y1){
+  g1<-ggplot(plotdf,aes(x=plotdf[[x1]],y=plotdf[[y1]]))+
+    geom_point(alpha=0.3)+
+    geom_line(aes(y=pred),col='red')+
+    labs(x=x1,
+         y=y1)
+  
+  g2<-ggplot(plotdf,aes(sample=SDR))+
+    geom_qq()+
+    geom_qq_line()+
+    labs(title='qq plot')
+  g3<-ggplot(plotdf,aes(x=SDR))+
+    geom_histogram(binwidth=0.2)+
+    labs(title='histogram')
+  g4<-ggplot(plotdf,aes(y=SDR,x=1:nrow(plotdf)))+
+    geom_line()+
+    geom_point(shape=1)+
+    labs(title='line_plot',
+         y='residual')
+  g5<-ggplot(plotdf,aes(y=SDR,x=pred))+
+    geom_point(shape=1)+
+    geom_smooth(color='red',se=FALSE)+
+    labs(title='SDR verses y_hat',
+         x='y_hat',
+         y='SDR')
+  g6<-ggplot(plotdf,aes(y=SDR,x=plotdf[[x1]]))+
+    geom_point(shape=1)+
+    geom_smooth(color='red',se=FALSE)+
+    labs(title='SDR verses x',
+         x=x1,
+         y='SDR')
+  g7<-ggplot(plotdf,aes(y=SDR))+
+    geom_boxplot()+
+    labs(title='boxplot',
+         y='residual')
+  g8<-ggplot(plotdf,aes(y=SDR,x=log(plotdf[[x1]])))+
+    geom_point(shape=1)+
+    geom_smooth(color='red',se=FALSE)+
+    labs(title='SDR verses x',
+         x=paste0('log(',x1,')'))
+  list(g1,g2,g3,g4,g5,g6,g7,g8)
+}
+mutatedata<-function(df,mod){
+  plotdf<-df%>%
+    add_residuals(mod)%>%
+    add_predictions(mod)%>%
+    ungroup%>%
+    mutate(SDR=rstudent(mod))
+  return(plotdf)
+}
+
+```
+There is a missing value in health_spend_pct_gdp of North Korea, I will just leave out North Korea if health_spend_pct_gdp turns out to be in our final model.
+##Part I: Research Questions
+
+i. Is there a statistically signiﬁcant relationship between democracy index and infant mortality? (without controlling for life expectancy)
+
+
+ii. Is there a statistically signiﬁcant relationship between the democracy index and life expectancy? (without controlling for infant mortality)
+
+Here are exlporatory analysis
+```{r}
+ggplot(tdata,aes(x=democracy_index,y=infant_mortality_rate))+
+    geom_point(alpha=0.6)+
+    labs(x='demorcracy_index',
+         y='infant_mortality_rate',
+         title = 'there is a negative trend')
+ggplot(tdata,aes(x=democracy_index,y=life_exp_at_birth))+
+    geom_point(alpha=0.6)+
+    labs(x='life_exp_at_birth',
+         y='infant_mortality_rate',
+         title='there is a positive trend')
+  
+```
+
+If we just do SLR, the model has a low R-squared but shows a significant trend between democracy and infant mortality as well as democracy and infant mortality life expectancy.
+Thus we think the there are no direct relaitonship between them, need to explore the relationship by adding more variables.
+
+Firstly we regress on all variables(except infant_mortality and life_exp_at_birth,life_exp_at_birth_m or f):
+(NOTE:we exclude the categorical variable:X1,name,region,regime_type,continent)
+population+birth_rate+death_rate+gdpPPP+gdpPPP_percap+labor_force+land_area+coastline+land_use_agricultural+urbanization+refined_petrol_consumption+co2_emisssions_energy_consumption+airports+roadways+democracy_index+electoral_process_and_pluralism+function_of_government+political_participation+political_culture+civil_liberties+health_spend_pct_gdp 
+
+```{r}
+model3<-lm(infant_mortality_rate~population+birth_rate+death_rate+gdpPPP+gdpPPP_percap+labor_force+land_area+coastline+land_use_agricultural+urbanization+refined_petrol_consumption+co2_emisssions_energy_consumption+airports+roadways+democracy_index+electoral_process_and_pluralism+function_of_government+political_participation+political_culture+civil_liberties+health_spend_pct_gdp ,data=tdata)
+model4<-lm(life_exp_at_birth~population+birth_rate+death_rate+gdpPPP+gdpPPP_percap+labor_force+land_area+coastline+land_use_agricultural+urbanization+refined_petrol_consumption+co2_emisssions_energy_consumption+airports+roadways+democracy_index+electoral_process_and_pluralism+function_of_government+political_participation+political_culture+civil_liberties+health_spend_pct_gdp ,data=tdata)
+summary(model3)
+summary(model4)
+vif(model3)
+vif(model4)
+```
+
+test for multicolinearity
+we test multicolinearity based on variable grouping.
+we firstly choose four groups of variables:
+1. political measures(democracy_index,electoral_process_and_pluralism,function_of_government,political_participation,political_culture,civil_liberties)
+2. land_use(land_area,coastline,land_use_agricultural,urbanization,refined_petrol_consumption,co2_emisssions_energy_consumption,airports,roadways)
+3. human resource()
+```{r}
+catag1<-tdata%>%dplyr::select(democracy_index,electoral_process_and_pluralism,function_of_government,political_participation,political_culture,civil_liberties)
+ggpairs(catag1)
+```
+we can find that they are really highly correlated, since we want to examine the democracy index, we will exclude them with only keeping the democracy_index.
+```{r politics}
+catag2<-tdata%>%dplyr::select(infant_mortality_rate,life_exp_at_birth,land_area,coastline,land_use_agricultural,urbanization,refined_petrol_consumption,co2_emisssions_energy_consumption,airports,roadways)
+ggpairs(catag2)
+```
+
+we observed that refined_petrol_consumption is highly correlated with co2_emisssions_energy_consumption,airports and roadways with all of them over 0.8 correlation.
+co2_emisssions_energy_consumption is highly correlated with roadways instead of airports, because vehicles are the major co2_emission contributor.
+
+so we exclude co2_emissions_energy_consumption,airports and roadways, leave with only refined_petrol_consumption by observing that it is the most related to life_expectancy_at_birth and infant_mortality_rate among these four variables.
+```{r human}
+catag3<-tdata%>%dplyr::select(infant_mortality_rate,life_exp_at_birth,population,birth_rate,death_rate,gdpPPP,gdpPPP_percap,labor_force,health_spend_pct_gdp)
+ggpairs(catag3)
+```
+we observed that population is highly correlated with gdpPPP and laborforce, gdpPPP is highly correlated with labor force. Since gdpPPP has the highest correlation with our dependent variable, thus we exclude the other two.
+now we test the colinearity on the left variables all-together
+```{r reduce}
+ggpairs(tdata%>%dplyr::select(birth_rate,death_rate,gdpPPP,gdpPPP_percap,land_area,coastline,land_use_agricultural,urbanization,refined_petrol_consumption,democracy_index,health_spend_pct_gdp))
+```
+
+we observed that gdpPPP is highly correlated with petrol_consumption while petrol_consumption is more correlated to our dependent variables, thus we will exclude the gdpPPP.
+now we perform model selection
+```{r reduce}
+model3_reduce<-lm(infant_mortality_rate~birth_rate+death_rate+gdpPPP_percap+land_area+coastline+land_use_agricultural+urbanization+refined_petrol_consumption+democracy_index+health_spend_pct_gdp ,data=tdata)
+model4_reduce<-lm(life_exp_at_birth~birth_rate+death_rate+gdpPPP_percap+land_area+coastline+land_use_agricultural+urbanization+refined_petrol_consumption+democracy_index+health_spend_pct_gdp ,data=tdata)
+summary(model3_reduce)
+summary(model4_reduce)
+```
+```{r BIC}
+tdata_reduce1<-tdata%>%
+  dplyr::select(infant_mortality_rate,birth_rate,death_rate,gdpPPP_percap,land_area,coastline,land_use_agricultural,urbanization,refined_petrol_consumption,democracy_index,health_spend_pct_gdp)
+tdata_reduce2<-tdata%>%
+  dplyr::select(life_exp_at_birth,birth_rate,death_rate,gdpPPP_percap,land_area,coastline,land_use_agricultural,urbanization,refined_petrol_consumption,democracy_index,health_spend_pct_gdp)
+regfit.full = regsubsets(infant_mortality_rate ~ ., data = tdata_reduce1)
+summary(regfit.full,scale="aic") 
+
+
+regfit.full2 = regsubsets(life_exp_at_birth~ ., data = tdata_reduce2)
+summary(regfit.full2,scale="aic") 
+
+
+```
+```{r}
+regfit.full = regsubsets(infant_mortality_rate ~ ., data = tdata_reduce1)
+summary(regfit.full,scale="adjr2") 
+
+
+regfit.full = regsubsets(life_exp_at_birth~ ., data = tdata_reduce2)
+summary(regfit.full,scale="adjr2") 
+
+```
+```{r}
+a<-tdata_reduce1%>%
+  rename(y=infant_mortality_rate)
+aicdata<-data.frame(a$birth_rate,a$death_rate,a$gdpPPP_percap,a$land_area,a$coastline,a$land_use_agricultural,a$urbanization,a$refined_petrol_consumption,a$democracy_index,a$health_spend_pct_gdp,a$y)
+print('model1 AIC')
+bestglm(aicdata,IC="AIC")
+#bestglm(aicdata,IC="BIC")
+b<-tdata_reduce2%>%
+  rename(y=life_exp_at_birth)
+aicdata1<-data.frame(b$birth_rate,a$death_rate,b$gdpPPP_percap,b$land_area,b$coastline,b$land_use_agricultural,b$urbanization,b$refined_petrol_consumption,b$democracy_index,b$health_spend_pct_gdp,b$y)
+print('model2 AIC')
+bestglm(aicdata1,IC="AIC")
+#bestglm(aicdata1,IC="BIC")
+```
+so our final model for infant_mortality_rate vs.democracy_index is infant_mortality_rate~death_rate+birth_rate+urbanization+democracy_index
+and our final model for life_exp_at_birth vs. democracy_index is life_exp_at_birth~death_rate+birth_rate+gdpPPP_percap+urbanization+democracy_index+health_spend_pct_gdp.
+From the output we claim that both have a significant relationship.
+```{r}
+modelfinal1<-lm(infant_mortality_rate~death_rate+birth_rate+urbanization+democracy_index,data=tdata)
+modelfinal2<-lm(life_exp_at_birth~death_rate+birth_rate+gdpPPP_percap+urbanization+democracy_index+health_spend_pct_gdp,data=tdata)
+summary(modelfinal1)
+vif(modelfinal1)
+vif(modelfinal2)
+```
+```{r}
+drawdf1<-mutatedata(tdata,modelfinal1)
+drawdf2<-mutatedata(tdata,modelfinal2)
+plots1<-drawgrid(drawdf1,'democracy_index','infant_mortality_rate')
+plots2<-drawgrid(drawdf2,'democracy_index','life_exp_at_birth')
+grid.arrange(plots1[[2]],plots1[[3]],plots1[[4]],plots1[[5]],plots1[[6]],plots1[[7]],ncol=3)
+
+grid.arrange(plots2[[2]],plots2[[3]],plots2[[4]],plots2[[5]],plots2[[6]],plots2[[7]],ncol=3)
+
+```
+From residual diagnostics of infant_mortality_rate model,we observed the distribution of errors is heavy-tailed with outliers.
+The independency is not violated. From both SDR vs. y_hat plot and SDR vs. democracy_index, we observe a microphone shape thus the constant variance is violated.
+Also we could consider doing a log transformation on the model to reduce this effect.
+From residual diagnostics of life_exp_at_birth model, we observed the distribution of errors is left-skewed.The residual plots shows nice result but we also observe outliers.
+
+```{r}
+library(MASS) 
+bac.box = boxcox(modelfinal1) 
+bac.lambda1 = bac.box$x[which(bac.box$y==max(bac.box$y))] 
+bac.box = boxcox(modelfinal2) 
+bac.lambda2 = bac.box$x[which(bac.box$y==max(bac.box$y))] 
+```
+
+```{r influentialobeservation}
+modelfinallog1<-lm(log(infant_mortality_rate)~death_rate+birth_rate+urbanization+democracy_index,data=tdata)
+summary(modelfinallog1)
+drawdflog1<-mutatedata(tdata,modelfinallog1)
+
+plotslog1<-drawgrid(drawdflog1,'democracy_index','infant_mortality_rate')
+
+grid.arrange(plotslog1[[2]],plotslog1[[3]],plotslog1[[4]],plotslog1[[5]],plotslog1[[6]],plotslog1[[7]],ncol=3)
+```
+
+we observe the model have a nicer qqplot and also the residual plot shows constant variance.
+
+Then we move to the influential obeservation.
+```{r}
+n<-165
+p1<-5
+p2<-7
+################leverage-model1
+X1=cbind(rep(1,n),tdata$death_rate,tdata$birth_rate,tdata$urbanization,tdata$democracy_index)
+plot(hat(X1),main="Leverage-model1") 
+abline(h=2*p1/n)
+tdata[which(hat(X1)>2*p1/n),]
+################leverage-model2
+X2=cbind(rep(1,n),tdata$death_rate,tdata$birth_rate,tdata$gdpPPP_percap,tdata$urbanization,tdata$democracy_index,tdata$health_spend_pct_gdp)
+plot(hat(X2),main="Leverage-model2",ylim=c(0.01,0.25)) 
+abline(h=2*p2/n)
+which(hat(X2)>2*p2/n)
+###########finalmodel1
+dfbetas(modelfinallog1)[,5]
+plot(dfbetas(modelfinallog1)[,5],main="log(infant mortality)-democracy index",ylim=c(-.4,.4)) 
+abline(h=2/sqrt(n)) 
+abline(h=-2/sqrt(n))
+###########finalmodel2
+dfbetas(modelfinal2)[,5]
+plot(dfbetas(modelfinal1)[,5],main="life expectancy-demorcracy index",ylim=c(-.5,.5)) 
+abline(h=2/sqrt(n)) 
+abline(h=-2/sqrt(n))
+```
+
+```{r}
+demoexp<-log10(tdata$democracy_index)
+modelfinalexp1<-lm(infant_mortality_rate~death_rate+birth_rate+urbanization+democracy_index+demoexp,data=tdata_reduce1)
+summary(modelfinalexp1)
+drawdfexp1<-mutatedata(tdata,modelfinalexp1)
+
+plotsexp1<-drawgrid(drawdfexp1,'democracy_index','infant_mortality_rate')
+
+grid.arrange(plotsexp1[[2]],plotsexp1[[3]],plotsexp1[[4]],plotsexp1[[5]],plotsexp1[[6]],plotsexp1[[7]],ncol=3)
+```
+exponential function doesn't work out
+```{r}
+M1<-tdata%>%dplyr::select(democracy_index,electoral_process_and_pluralism,function_of_government,political_participation,political_culture,civil_liberties)%>%rename(electoral_process=electoral_process_and_pluralism)%>%cor()
+M2<-tdata%>%dplyr::select(infant_mortality_rate,life_exp_at_birth,land_area,coastline,land_use_agricultural,urbanization,refined_petrol_consumption,co2_emisssions_energy_consumption,airports,roadways)%>%rename(co2=co2_emisssions_energy_consumption)%>%cor()
+M3<-tdata%>%dplyr::select(infant_mortality_rate,life_exp_at_birth,population,birth_rate,death_rate,gdpPPP,gdpPPP_percap,labor_force,health_spend_pct_gdp)%>%cor()
+corrplot(M1, method = "square",tl.col='black')
+corrplot(M2, method = "square",tl.col='black')
+corrplot(M3, method = "square",tl.col='black')
+```
+##Part II: Research Questions
+Build a statistical model intended to predict one (and only one) of the following two variables:
+Total length of roadways 
+Life expectancy 
+I will choose the length of life expectancy.
+As we are not interested in multiconlinearity, we will apply aic directly for model selection.
+```{r prediction echo=T, results='hide', message=F, warning=F}
+test.index <- sample(1:165,.2*165,replace=F)
+test.data <-tdata[test.index,]
+train.data <- tdata[-test.index,]
+# Check sample sizes
+
+strain.data<-standardize(tdata)[-test.index,]
+stest.data<-standardize(tdata)[test.index,]
+inputX<-train.data%>%
+  as_tibble()%>%
+  dplyr::select(roadways,infant_mortality_rate,population,birth_rate,death_rate,gdpPPP,gdpPPP_percap,labor_force,land_area,coastline,land_use_agricultural,urbanization,refined_petrol_consumption,co2_emisssions_energy_consumption,airports,democracy_index,electoral_process_and_pluralism,function_of_government,political_participation,political_culture,civil_liberties,health_spend_pct_gdp)%>%
+  as.matrix()
+tinputX<-test.data%>%
+  as_tibble()%>%
+  dplyr::select(roadways,infant_mortality_rate,population,birth_rate,death_rate,gdpPPP,gdpPPP_percap,labor_force,land_area,coastline,land_use_agricultural,urbanization,refined_petrol_consumption,co2_emisssions_energy_consumption,airports,democracy_index,electoral_process_and_pluralism,function_of_government,political_participation,political_culture,civil_liberties,health_spend_pct_gdp)%>%
+  as.matrix()
+```
+
+model selection based on MSPE
+```{r}
+##################################AIC model
+aic<-train.data%>%
+  dplyr::select(population,birth_rate,death_rate,gdpPPP,gdpPPP_percap,labor_force,land_area,coastline,land_use_agricultural,urbanization,refined_petrol_consumption,co2_emisssions_energy_consumption,airports,roadways,democracy_index,electoral_process_and_pluralism,function_of_government,political_participation,political_culture,civil_liberties,health_spend_pct_gdp,infant_mortality_rate,life_exp_at_birth)%>%
+  rename(y=life_exp_at_birth)%>%
+  data.frame()
+train<-aic%>%
+  rename(life_exp_at_birth=y)
+bestglm(aic,IC="AIC")
+pmodelaic<-lm(life_exp_at_birth~birth_rate+death_rate+gdpPPP
++gdpPPP_percap+                  
+land_area+                       
+land_use_agricultural+         
+urbanization+                    
+co2_emisssions_energy_consumption+ 
+airports+                          
+roadways+                          
+democracy_index+                  
+function_of_government+         
+civil_liberties+                  
+health_spend_pct_gdp+            
+infant_mortality_rate,data=train
+)
+test.data1<-test.data%>%
+  dplyr::select(life_exp_at_birth,birth_rate,death_rate,gdpPPP,gdpPPP_percap,land_area,land_use_agricultural,urbanization,               
+co2_emisssions_energy_consumption, 
+airports,                          
+roadways,                          
+democracy_index,                  
+function_of_government,         
+civil_liberties,                  
+health_spend_pct_gdp,            
+infant_mortality_rate)
+y.hat.testaic <- predict(pmodelaic,newdata=test.data1)
+summary(pmodelaic)
+# Compute MSPE or "Test Error"
+MSPEaic <- sum((test.data$life_exp_at_birth-y.hat.testaic)^2)/33
+MSEaic<-mean((predict(pmodelaic,data=train)-train$life_exp_at_birth)^2)
+#######################BIC model
+bestglm(aic,IC="BIC")
+pmodelbic<-lm(life_exp_at_birth~birth_rate+democracy_index+urbanization+land_area+gdpPPP,data=train.data)
+test.data2<-test.data%>%
+  dplyr::select(birth_rate,democracy_index,urbanization,land_area,gdpPPP)
+y.hat.testbic <- predict(pmodelbic,newdata=test.data2)
+summary(pmodelbic)
+# Compute MSPE or "Test Error"
+MSPEbic <- sum((test.data$life_exp_at_birth-y.hat.testbic)^2)/33
+MSEbic<-mean((predict(pmodelbic,data=train)-train$life_exp_at_birth)^2)
+######################lasso model
+CV=cv.glmnet(x=inputX,y=train.data$life_exp_at_birth,family='gaussian',type.measure='mse',alpha=1,nlambda=10)
+plot(CV)
+y.hat.testlasso<-predict(CV,newx=tinputX,s = "lambda.min")
+# Compute MSPE or "Test Error"
+MSPElasso <- sum((test.data$life_exp_at_birth-y.hat.testlasso)^2)/33
+MSElasso<-mean((predict(CV,newx=inputX,s = "lambda.min")-train.data$life_exp_at_birth)^2)
+######################ridge regression
+CV2=cv.glmnet(x=inputX,y=train.data$life_exp_at_birth,family='gaussian',type.measure='mse',alpha=0,nlambda=10)
+plot(CV2)
+y.hat.testridge<-predict(CV2,newx=tinputX,s = "lambda.min")
+# Compute MSPE or "Test Error"
+MSPEridge <- sum((test.data$life_exp_at_birth-y.hat.testridge)^2)/33
+MSEridge<-mean((predict(CV2,newx=inputX,s = "lambda.min")-train.data$life_exp_at_birth)^2)
+#####################ridge regression(AIC)
+inputXaic<-train.data%>%
+  dplyr::select(life_exp_at_birth,birth_rate,death_rate,gdpPPP,gdpPPP_percap,land_area,land_use_agricultural,urbanization,co2_emisssions_energy_consumption, 
+airports,                          
+roadways,                          
+democracy_index,                  
+function_of_government,         
+civil_liberties,                  
+health_spend_pct_gdp,            
+infant_mortality_rate)%>%
+  as_tibble()%>%
+  as.matrix()
+tinputXaic<-test.data1%>%
+  as_tibble()%>%
+  as.matrix()
+CV3=cv.glmnet(x=inputXaic,y=train.data$life_exp_at_birth,family='gaussian',type.measure='mse',alpha=0,nlambda=10)
+plot(CV3)
+y.hat.testridgeaic<-predict(CV3,newx=tinputXaic,s = "lambda.1se")
+# Compute MSPE or "Test Error"
+MSPEridgeaic <- sum((test.data$life_exp_at_birth-y.hat.testridge)^2)/33
+MSEridgeaic<-mean((predict(CV3,newx=inputXaic,s = "lambda.1se")-train.data$life_exp_at_birth)^2)
+#####################ridge regression(BIC)
+inputXbic<-train.data%>%
+  dplyr::select(birth_rate,democracy_index,urbanization,land_area,gdpPPP)%>%
+  as_tibble()%>%
+  as.matrix()
+tinputXbic<-test.data2%>%
+  as_tibble()%>%
+  as.matrix()
+CV4=cv.glmnet(x=inputXbic,y=train.data$life_exp_at_birth,family='gaussian',type.measure='mse',alpha=0,nlambda=10)
+plot(CV4)
+y.hat.testridge<-predict(CV4,newx=tinputXbic,s = "lambda.1se")
+# Compute MSPE or "Test Error"
+MSPEridgebic <- sum((test.data$life_exp_at_birth-y.hat.testridge)^2)/33
+MSEridgebic<-mean((predict(CV4,newx=inputXbic,s = "lambda.1se")-train.data$life_exp_at_birth)^2)
+#####################robust regression(BIC)
+
+pmodelrob<-rlm(life_exp_at_birth~birth_rate+democracy_index+urbanization+land_area+gdpPPP,data=train.data,scale.est='Huber')
+summary(pmodelrob)
+# Compute MSPE or "Test Error"
+y.hat.testrob <- predict(pmodelrob,newdata=test.data2)
+MSPErob <- sum((test.data$life_exp_at_birth-y.hat.testrob)^2)/33
+MSErob<-mean((predict(pmodelrob,data=train)-train$life_exp_at_birth)^2)
+
+#####################robust regression(AIC)
+pmodelrob2<-rlm(life_exp_at_birth~birth_rate+death_rate+gdpPPP
++gdpPPP_percap+                  
+land_area+                       
+land_use_agricultural+         
+urbanization+                    
+co2_emisssions_energy_consumption+ 
+airports+                          
+roadways+                          
+democracy_index+                  
+function_of_government+         
+civil_liberties+                  
+health_spend_pct_gdp+            
+infant_mortality_rate,data=train.data,scale.est='Huber')
+summary(pmodelrob)
+# Compute MSPE or "Test Error"
+y.hat.testrob2 <- predict(pmodelrob2,newdata=test.data1)
+MSPErob2 <- sum((test.data$life_exp_at_birth-y.hat.testrob2)^2)/33
+MSErob2<-mean((predict(pmodelrob2,data=train)-train$life_exp_at_birth)^2)
+######################################
+pmodelrob2<-rlm(life_exp_at_birth~birth_rate+death_rate+                       
+land_use_agricultural+         
+urbanization+                    
+co2_emisssions_energy_consumption+ 
+airports+                          
+roadways+                          
+democracy_index+                  
+function_of_government+         
+civil_liberties+                  
+health_spend_pct_gdp+            
+infant_mortality_rate,data=train.data,scale.est='Huber')
+summary(pmodelrob)
+```
+
+Here is the part of diagnostics and influential obeservations.
+```{r}
+fit <- glmnet(x=inputXaic,y=train.data$life_exp_at_birth,family='gaussian',type.measure='mse',alpha=0,lambda = CV3$lambda.1se) 
+
+tLL <- fit$nulldev - deviance(fit)
+k <- fit$df
+n <- fit$nobs
+AIC <- -tLL+2*k+2*k*(k+1)/(n-k-1)
+
+BIC<-log(n)*k - tLL
+fit$dev.ratio
+bestglm(aic,IC="AIC")
+bestglm(aic,IC="BIC")
+plotfinal<-train%>%
+    mutate(pred=(predict(CV3,newx=inputXaic,s = "lambda.1se")),SDR=life_exp_at_birth-pred)%>%
+    ungroup()
+plotsp<-drawgrid(plotfinal,'infant_mortality_rate','life_exp_at_birth')
+grid.arrange(plotsp[[2]],plotsp[[3]],plotsp[[4]],plotsp[[5]],plotsp[[6]],plotsp[[7]],ncol=3)
+p<-16
+n<-132
+################leverage-pmodel
+X1=cbind(rep(1,n),tdata$death_rate,tdata$birth_rate,tdata$urbanization,tdata$democracy_index)
+plot(hat(X1),main="Leverage-model1") 
+abline(h=2*p1/n)
+tdata[which(hat(X1)>2*p1/n),]
+#DFFITS 
+plot(dffits(pmodelaic),main="DFFITS",ylim=c(-2.2,9.5)) 
+abline(h=2*sqrt(p/n)) 
+abline(h=-2*sqrt(p/n))
+#Cooks
+plot(cooks.distance(pmodelaic),main="Cook’s Distance",ylim=c(-.1,5.5)) 
+f.star=qf(.5,df1=p,df2=n-p) 
+abline(h=f.star) 
+abline(h=0,lty=2)
+```
